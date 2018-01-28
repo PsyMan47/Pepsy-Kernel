@@ -27,6 +27,7 @@
 #include <linux/mmu_context.h>
 #include <linux/aio.h>
 
+#include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/moduleparam.h>
 
@@ -113,6 +114,7 @@ enum ep0_state {
 struct dev_data {
 	spinlock_t			lock;
 	atomic_t			count;
+	int				udc_usage;
 	enum ep0_state			state;		/* P: lock */
 	struct usb_gadgetfs_event	event [N_EVENT];
 	unsigned			ev_next;
@@ -620,9 +622,9 @@ static void ep_aio_complete(struct usb_ep *ep, struct usb_request *req)
 		priv->actual = req->actual;
 		schedule_work(&priv->work);
 	}
-	spin_unlock(&epdata->dev->lock);
 
 	usb_ep_free_request(ep, req);
+	spin_unlock(&epdata->dev->lock);
 	put_ep(epdata);
 }
 
@@ -1060,11 +1062,14 @@ ep0_read (struct file *fd, char __user *buf, size_t len, loff_t *ptr)
 				retval = -EIO;
 			else {
 				len = min (len, (size_t)dev->req->actual);
-// FIXME don't call this with the spinlock held ...
+				++dev->udc_usage;
+				spin_unlock_irq(&dev->lock);
 				if (copy_to_user (buf, dev->req->buf, len))
 					retval = -EFAULT;
 				else
 					retval = len;
+				spin_lock_irq(&dev->lock);
+				--dev->udc_usage;
 				clean_req (dev->gadget->ep0, dev->req);
 				/* NOTE userspace can't yet choose to stall */
 			}
@@ -1318,8 +1323,20 @@ static long dev_ioctl (struct file *fd, unsigned code, unsigned long value)
 	struct usb_gadget	*gadget = dev->gadget;
 	long ret = -ENOTTY;
 
-	if (gadget->ops->ioctl)
+	spin_lock_irq(&dev->lock);
+	if (dev->state == STATE_DEV_OPENED ||
+			dev->state == STATE_DEV_UNBOUND) {
+		/* Not bound to a UDC */
+	} else if (gadget->ops->ioctl) {
+		++dev->udc_usage;
+		spin_unlock_irq(&dev->lock);
+
 		ret = gadget->ops->ioctl (gadget, code, value);
+
+		spin_lock_irq(&dev->lock);
+		--dev->udc_usage;
+	}
+	spin_unlock_irq(&dev->lock);
 
 	return ret;
 }
@@ -1574,7 +1591,12 @@ delegate:
 	if (value >= 0 && dev->state != STATE_DEV_SETUP) {
 		req->length = value;
 		req->zero = value < w_length;
+
+		++dev->udc_usage;
 		value = usb_ep_queue (gadget->ep0, req, GFP_ATOMIC);
+		spin_lock(&dev->lock);
+		--dev->udc_usage;
+		spin_unlock(&dev->lock);
 		if (value < 0) {
 			DBG (dev, "ep_queue --> %d\n", value);
 			req->status = 0;
@@ -1600,11 +1622,14 @@ static void destroy_ep_files (struct dev_data *dev)
 		/* break link to FS */
 		ep = list_first_entry (&dev->epfiles, struct ep_data, epfiles);
 		list_del_init (&ep->epfiles);
+		spin_unlock_irq (&dev->lock);
+
 		dentry = ep->dentry;
 		ep->dentry = NULL;
 		parent = dentry->d_parent->d_inode;
 
 		/* break link to controller */
+		mutex_lock(&ep->lock);
 		if (ep->state == STATE_EP_ENABLED)
 			(void) usb_ep_disable (ep->ep);
 		ep->state = STATE_EP_UNBOUND;
@@ -1612,8 +1637,8 @@ static void destroy_ep_files (struct dev_data *dev)
 		ep->ep = NULL;
 		wake_up (&ep->wait);
 		put_ep (ep);
+		mutex_unlock(&ep->lock);
 
-		spin_unlock_irq (&dev->lock);
 
 		/* break link to dcache */
 		mutex_lock (&parent->i_mutex);
@@ -1685,6 +1710,11 @@ gadgetfs_unbind (struct usb_gadget *gadget)
 
 	spin_lock_irq (&dev->lock);
 	dev->state = STATE_DEV_UNBOUND;
+	while (dev->udc_usage > 0) {
+		spin_unlock_irq(&dev->lock);
+		usleep_range(1000, 2000);
+		spin_lock_irq(&dev->lock);
+	}
 	spin_unlock_irq (&dev->lock);
 
 	destroy_ep_files (dev);
@@ -1877,8 +1907,10 @@ dev_config (struct file *fd, const char __user *buf, size_t len, loff_t *ptr)
 
 	spin_lock_irq (&dev->lock);
 	value = -EINVAL;
-	if (dev->buf)
+	if (dev->buf) {
+		kfree(kbuf);
 		goto fail;
+	}
 	dev->buf = kbuf;
 
 	/* full or low speed config */
