@@ -546,6 +546,7 @@ struct fg_chip {
 	struct delayed_work	update_sram_data;
 	struct delayed_work	update_temp_work;
 	struct delayed_work	check_empty_work;
+	struct delayed_work	soc_work;
 	char			*batt_profile;
 	u8			thermal_coefficients[THERMAL_COEFF_N_BYTES];
 	u32			cc_cv_threshold_mv;
@@ -583,6 +584,7 @@ struct fg_chip {
 	u16			*offset;
 	bool			ima_supported;
 	bool			init_done;
+	int			mi_last_soc;
 	/* jeita hysteresis */
 	bool			jeita_hysteresis_support;
 	bool			batt_hot;
@@ -1233,6 +1235,9 @@ out:
 #define MEM_INTF_IMA_EXP_STS		0x55
 #define MEM_INTF_IMA_HW_STS		0x56
 #define MEM_INTF_IMA_BYTE_EN		0x60
+#define IMA_ADDR_STBL_ERR		BIT(7)
+#define IMA_WR_ACS_ERR			BIT(6)
+#define IMA_RD_ACS_ERR			BIT(5)
 #define IMA_IACS_CLR			BIT(2)
 #define IMA_IACS_RDY			BIT(1)
 static int fg_run_iacs_clear_sequence(struct fg_chip *chip)
@@ -1283,18 +1288,10 @@ static int fg_run_iacs_clear_sequence(struct fg_chip *chip)
 	return rc;
 }
 
-#define IACS_ERR_BIT		BIT(0)
-#define XCT_ERR_BIT		BIT(1)
-#define DATA_RD_ERR_BIT		BIT(3)
-#define DATA_WR_ERR_BIT		BIT(4)
-#define ADDR_BURST_WRAP_BIT	BIT(5)
-#define ADDR_RNG_ERR_BIT	BIT(6)
-#define ADDR_SRC_ERR_BIT	BIT(7)
-static int fg_check_ima_exception(struct fg_chip *chip, bool check_hw_sts)
+static int fg_check_ima_exception(struct fg_chip *chip)
 {
 	int rc = 0, ret = 0;
 	u8 err_sts = 0, exp_sts = 0, hw_sts = 0;
-	bool run_err_clr_seq = false;
 
 	rc = fg_read(chip, &err_sts,
 			chip->mem_base + MEM_INTF_IMA_ERR_STS, 1);
@@ -1303,49 +1300,25 @@ static int fg_check_ima_exception(struct fg_chip *chip, bool check_hw_sts)
 		return rc;
 	}
 
-	rc = fg_read(chip, &exp_sts,
-			chip->mem_base + MEM_INTF_IMA_EXP_STS, 1);
-	if (rc) {
-		pr_err("Error in reading IMA_EXP_STS, rc=%d\n", rc);
-		return rc;
-	}
-
-	rc = fg_read(chip, &hw_sts,
-			chip->mem_base + MEM_INTF_IMA_HW_STS, 1);
-	if (rc) {
-		pr_err("Error in reading IMA_HW_STS, rc=%d\n", rc);
-		return rc;
-	}
-
-	pr_info_once("Initial ima_err_sts=%x ima_exp_sts=%x ima_hw_sts=%x\n",
-		err_sts, exp_sts, hw_sts);
-
-	if (fg_debug_mask & (FG_MEM_DEBUG_READS | FG_MEM_DEBUG_WRITES))
-		pr_info("ima_err_sts=%x ima_exp_sts=%x ima_hw_sts=%x\n",
-			err_sts, exp_sts, hw_sts);
-
-	if (check_hw_sts) {
-		/*
-		 * Lower nibble should be equal to upper nibble before SRAM
-		 * transactions begins from SW side. If they are unequal, then
-		 * the error clear sequence should be run irrespective of IMA
-		 * exception errors.
-		 */
-		if ((hw_sts & 0x0F) != hw_sts >> 4) {
-			pr_err("IMA HW not in correct state, hw_sts=%x\n",
-				hw_sts);
-			run_err_clr_seq = true;
+	if (err_sts & (IMA_ADDR_STBL_ERR | IMA_WR_ACS_ERR | IMA_RD_ACS_ERR)) {
+		rc = fg_read(chip, &exp_sts,
+				chip->mem_base + MEM_INTF_IMA_EXP_STS, 1);
+		if (rc) {
+			pr_err("Error in reading IMA_EXP_STS, rc=%d\n", rc);
+			return rc;
 		}
-	}
 
-	if (exp_sts & (IACS_ERR_BIT | XCT_ERR_BIT | DATA_RD_ERR_BIT |
-		DATA_WR_ERR_BIT | ADDR_BURST_WRAP_BIT | ADDR_RNG_ERR_BIT |
-		ADDR_SRC_ERR_BIT)) {
-		pr_err("IMA exception bit set, exp_sts=%x\n", exp_sts);
-		run_err_clr_seq = true;
-	}
+		rc = fg_read(chip, &hw_sts,
+				chip->mem_base + MEM_INTF_IMA_HW_STS, 1);
+		if (rc) {
+			pr_err("Error in reading IMA_HW_STS, rc=%d\n", rc);
+			return rc;
+		}
 
-	if (run_err_clr_seq) {
+		pr_err("IMA access failed ima_err_sts=%x ima_exp_sts=%x ima_hw_sts=%x\n",
+				err_sts, exp_sts, hw_sts);
+		rc = err_sts;
+
 		ret = fg_run_iacs_clear_sequence(chip);
 		if (!ret)
 			return -EAGAIN;
@@ -1515,7 +1488,7 @@ static int fg_check_iacs_ready(struct fg_chip *chip)
 			pr_err("Couldn't check FG ALG status, rc=%d\n",
 				rc);
 		/* perform IACS_CLR sequence */
-		fg_check_ima_exception(chip, false);
+		fg_check_ima_exception(chip);
 		return -EBUSY;
 	}
 
@@ -1574,13 +1547,12 @@ static int __fg_interleaved_mem_write(struct fg_chip *chip, u8 *val,
 
 		rc = fg_check_iacs_ready(chip);
 		if (rc) {
-			pr_err("IACS_RDY failed post write to address %x offset %d rc=%d\n",
-				address, offset, rc);
+			pr_debug("IACS_RDY failed rc=%d\n", rc);
 			return rc;
 		}
 
 		/* check for error condition */
-		rc = fg_check_ima_exception(chip, false);
+		rc = fg_check_ima_exception(chip);
 		if (rc) {
 			pr_err("IMA transaction failed rc=%d", rc);
 			return rc;
@@ -1621,13 +1593,12 @@ static int __fg_interleaved_mem_read(struct fg_chip *chip, u8 *val, u16 address,
 
 		rc = fg_check_iacs_ready(chip);
 		if (rc) {
-			pr_err("IACS_RDY failed post read for address %x offset %d rc=%d\n",
-				address, offset, rc);
+			pr_debug("IACS_RDY failed rc=%d\n", rc);
 			return rc;
 		}
 
 		/* check for error condition */
-		rc = fg_check_ima_exception(chip, false);
+		rc = fg_check_ima_exception(chip);
 		if (rc) {
 			pr_err("IMA transaction failed rc=%d", rc);
 			return rc;
@@ -1679,7 +1650,7 @@ static int fg_interleaved_mem_config(struct fg_chip *chip, u8 *val,
 		 * clear, then return an error instead of waiting for it again.
 		 */
 		if  (time_count > 4) {
-			pr_err("Waited for ~16ms polling RIF_MEM_ACCESS_REQ\n");
+			pr_err("Waited for 1.5 seconds polling RIF_MEM_ACCESS_REQ\n");
 			return -ETIMEDOUT;
 		}
 
@@ -1705,8 +1676,7 @@ static int fg_interleaved_mem_config(struct fg_chip *chip, u8 *val,
 
 	rc = fg_check_iacs_ready(chip);
 	if (rc) {
-		pr_err("IACS_RDY failed before setting address: %x offset: %d rc=%d\n",
-			address, offset, rc);
+		pr_debug("IACS_RDY failed rc=%d\n", rc);
 		return rc;
 	}
 
@@ -1719,8 +1689,7 @@ static int fg_interleaved_mem_config(struct fg_chip *chip, u8 *val,
 
 	rc = fg_check_iacs_ready(chip);
 	if (rc)
-		pr_err("IACS_RDY failed after setting address: %x offset: %d rc=%d\n",
-			address, offset, rc);
+		pr_debug("IACS_RDY failed rc=%d\n", rc);
 
 	return rc;
 }
@@ -1731,7 +1700,7 @@ static int fg_interleaved_mem_config(struct fg_chip *chip, u8 *val,
 static int fg_interleaved_mem_read(struct fg_chip *chip, u8 *val, u16 address,
 						int len, int offset)
 {
-	int rc = 0, ret, orig_address = address;
+	int rc = 0, orig_address = address;
 	u8 start_beat_count, end_beat_count, count = 0;
 	bool retry = false;
 
@@ -1765,17 +1734,9 @@ static int fg_interleaved_mem_read(struct fg_chip *chip, u8 *val, u16 address,
 			len, address, offset);
 
 retry:
-	if (count >= RETRY_COUNT) {
-		pr_err("Retried reading 3 times\n");
-		retry = false;
-		goto out;
-	}
-
 	rc = fg_interleaved_mem_config(chip, val, address, offset, len, 0);
 	if (rc) {
 		pr_err("failed to configure SRAM for IMA rc = %d\n", rc);
-		retry = true;
-		count++;
 		goto out;
 	}
 
@@ -1784,21 +1745,18 @@ retry:
 			chip->mem_base + MEM_INTF_FG_BEAT_COUNT, 1);
 	if (rc) {
 		pr_err("failed to read beat count rc=%d\n", rc);
-		retry = true;
-		count++;
 		goto out;
 	}
 
 	/* read data */
 	rc = __fg_interleaved_mem_read(chip, val, address, offset, len);
 	if (rc) {
-		count++;
 		if ((rc == -EAGAIN) && (count < RETRY_COUNT)) {
+			count++;
 			pr_err("IMA access failed retry_count = %d\n", count);
 			goto retry;
 		} else {
 			pr_err("failed to read SRAM address rc = %d\n", rc);
-			retry = true;
 			goto out;
 		}
 	}
@@ -1808,8 +1766,6 @@ retry:
 			chip->mem_base + MEM_INTF_FG_BEAT_COUNT, 1);
 	if (rc) {
 		pr_err("failed to read beat count rc=%d\n", rc);
-		retry = true;
-		count++;
 		goto out;
 	}
 
@@ -1822,20 +1778,19 @@ retry:
 		if (fg_debug_mask & FG_MEM_DEBUG_READS)
 			pr_info("Beat count do not match - retry transaction\n");
 		retry = true;
-		count++;
 	}
 out:
 	/* Release IMA access */
-	ret = fg_masked_write(chip, MEM_INTF_CFG(chip), IMA_REQ_ACCESS, 0, 1);
-	if (ret)
-		pr_err("failed to reset IMA access bit ret = %d\n", ret);
+	rc = fg_masked_write(chip, MEM_INTF_CFG(chip), IMA_REQ_ACCESS, 0, 1);
+	if (rc)
+		pr_err("failed to reset IMA access bit rc = %d\n", rc);
 
 	if (retry) {
 		retry = false;
 		goto retry;
 	}
-
 	mutex_unlock(&chip->rw_lock);
+
 exit:
 	fg_relax(&chip->memif_wakeup_source);
 	return rc;
@@ -1844,9 +1799,8 @@ exit:
 static int fg_interleaved_mem_write(struct fg_chip *chip, u8 *val, u16 address,
 							int len, int offset)
 {
-	int rc = 0, ret, orig_address = address;
+	int rc = 0, orig_address = address;
 	u8 count = 0;
-	bool retry = false;
 
 	if (chip->fg_shutdown)
 		return -EINVAL;
@@ -1869,44 +1823,30 @@ static int fg_interleaved_mem_write(struct fg_chip *chip, u8 *val, u16 address,
 			len, address, offset);
 
 retry:
-	if (count >= RETRY_COUNT) {
-		pr_err("Retried writing 3 times\n");
-		retry = false;
-		goto out;
-	}
-
 	rc = fg_interleaved_mem_config(chip, val, address, offset, len, 1);
 	if (rc) {
-		pr_err("failed to configure SRAM for IMA rc = %d\n", rc);
-		retry = true;
-		count++;
+		pr_err("failed to xonfigure SRAM for IMA rc = %d\n", rc);
 		goto out;
 	}
 
 	/* write data */
 	rc = __fg_interleaved_mem_write(chip, val, address, offset, len);
 	if (rc) {
-		count++;
 		if ((rc == -EAGAIN) && (count < RETRY_COUNT)) {
+			count++;
 			pr_err("IMA access failed retry_count = %d\n", count);
 			goto retry;
 		} else {
 			pr_err("failed to write SRAM address rc = %d\n", rc);
-			retry = true;
 			goto out;
 		}
 	}
 
 out:
 	/* Release IMA access */
-	ret = fg_masked_write(chip, MEM_INTF_CFG(chip), IMA_REQ_ACCESS, 0, 1);
-	if (ret)
-		pr_err("failed to reset IMA access bit ret = %d\n", ret);
-
-	if (retry) {
-		retry = false;
-		goto retry;
-	}
+	rc = fg_masked_write(chip, MEM_INTF_CFG(chip), IMA_REQ_ACCESS, 0, 1);
+	if (rc)
+		pr_err("failed to reset IMA access bit rc = %d\n", rc);
 
 	mutex_unlock(&chip->rw_lock);
 	fg_relax(&chip->memif_wakeup_source);
@@ -2252,8 +2192,10 @@ static int get_prop_capacity(struct fg_chip *chip)
 	if (chip->battery_missing)
 		return MISSING_CAPACITY;
 
-	if (!chip->profile_loaded && !chip->use_otp_profile)
-		return DEFAULT_CAPACITY;
+	if (!chip->profile_loaded && !chip->use_otp_profile) {
+		pr_info("loading batt profile, return last soc %d\n", chip->mi_last_soc);
+		return chip->mi_last_soc;
+	}
 
 	if (chip->charge_full)
 		return FULL_CAPACITY;
@@ -2290,6 +2232,37 @@ static int get_prop_capacity(struct fg_chip *chip)
 
 	return DIV_ROUND_CLOSEST((msoc - 1) * (FULL_CAPACITY - 1),
 			FULL_SOC_RAW - 2) + 1;
+}
+
+static int get_last_soc(struct fg_chip *chip)
+{
+	u8 cap[2];
+	int rc, capacity = 0, tries = 0;
+
+	while (tries < MAX_TRIES_SOC) {
+		rc = fg_read(chip, cap,
+				chip->soc_base + SOC_MONOTONIC_SOC, 2);
+		if (rc) {
+			pr_err("spmi read failed: addr=%03x, rc=%d\n",
+				chip->soc_base + SOC_MONOTONIC_SOC, rc);
+			return rc;
+		}
+
+		if (cap[0] == cap[1])
+			break;
+
+		tries++;
+	}
+
+	if (tries == MAX_TRIES_SOC) {
+		pr_err("shadow registers do not match\n");
+		return DEFAULT_CAPACITY;
+	}
+
+	if (cap[0] > 0)
+		capacity = (cap[0] * 100 / FULL_PERCENT);
+
+	return capacity;
 }
 
 #define HIGH_BIAS	3
@@ -2699,6 +2672,36 @@ resched:
 		msecs_to_jiffies(SANITY_CHECK_PERIOD_MS));
 out:
 	fg_relax(&chip->sanity_wakeup_source);
+}
+
+#define SOC_WORK_MS	20000
+static void soc_work_fn(struct work_struct *work)
+{
+	struct fg_chip *chip = container_of(work,
+				struct fg_chip,
+				soc_work.work);
+	int soc;
+	static int prev_soc = -EINVAL;
+
+	soc = get_prop_capacity(chip);
+	pr_info("adjust_soc: s %d r %d i %d v %d t %d\n",
+			soc,
+			get_sram_prop_now(chip, FG_DATA_BATT_ESR),
+			get_sram_prop_now(chip, FG_DATA_CURRENT),
+			get_sram_prop_now(chip, FG_DATA_VOLTAGE),
+			get_sram_prop_now(chip, FG_DATA_BATT_TEMP));
+
+	/* if soc changes, report power supply change uevent */
+	if (soc != prev_soc) {
+		if (chip->power_supply_registered)
+			power_supply_changed(&chip->bms_psy);
+		prev_soc = soc;
+	}
+
+	schedule_delayed_work(
+		&chip->soc_work,
+		msecs_to_jiffies(SOC_WORK_MS));
+
 }
 
 #define SRAM_TIMEOUT_MS			3000
@@ -7458,6 +7461,7 @@ static int fg_init_irqs(struct fg_chip *chip)
 
 static void fg_cancel_all_works(struct fg_chip *chip)
 {
+	cancel_delayed_work_sync(&chip->soc_work);
 	cancel_delayed_work_sync(&chip->check_sanity_work);
 	cancel_delayed_work_sync(&chip->update_sram_data);
 	cancel_delayed_work_sync(&chip->update_temp_work);
@@ -8520,7 +8524,7 @@ out:
 #define ANA_MINOR		0x2
 #define ANA_MAJOR		0x3
 #define IACS_INTR_SRC_SLCT	BIT(3)
-static int fg_memif_init(struct fg_chip *chip)
+static int fg_setup_memif_offset(struct fg_chip *chip)
 {
 	int rc;
 	u8 dig_major;
@@ -8556,13 +8560,6 @@ static int fg_memif_init(struct fg_chip *chip)
 			IACS_INTR_SRC_SLCT, 1);
 		if (rc) {
 			pr_err("failed to configure interrupt source %d\n", rc);
-			return rc;
-		}
-
-		/* check for error condition */
-		rc = fg_check_ima_exception(chip, true);
-		if (rc) {
-			pr_err("Error in clearing IMA exception rc=%d", rc);
 			return rc;
 		}
 	}
@@ -8654,6 +8651,9 @@ static void delayed_init_work(struct work_struct *work)
 	if (chip->last_temp_update_time == 0)
 		update_temp_data(&chip->update_temp_work.work);
 
+       schedule_delayed_work(&chip->soc_work,
+               msecs_to_jiffies(SOC_WORK_MS));
+
 	if (!chip->use_otp_profile)
 		schedule_delayed_work(&chip->batt_profile_init, 0);
 
@@ -8743,6 +8743,7 @@ static int fg_probe(struct spmi_device *spmi)
 	INIT_DELAYED_WORK(&chip->update_sram_data, update_sram_data_work);
 	INIT_DELAYED_WORK(&chip->update_temp_work, update_temp_data);
 	INIT_DELAYED_WORK(&chip->check_empty_work, check_empty_work);
+	INIT_DELAYED_WORK(&chip->soc_work, soc_work_fn);
 	INIT_DELAYED_WORK(&chip->batt_profile_init, batt_profile_init);
 	INIT_DELAYED_WORK(&chip->check_sanity_work, check_sanity_work);
 	INIT_WORK(&chip->ima_error_recovery_work, ima_error_recovery_work);
@@ -8834,7 +8835,7 @@ static int fg_probe(struct spmi_device *spmi)
 		return rc;
 	}
 
-	rc = fg_memif_init(chip);
+	rc = fg_setup_memif_offset(chip);
 	if (rc) {
 		pr_err("Unable to setup mem_if offsets rc=%d\n", rc);
 		goto of_init_fail;
@@ -8903,6 +8904,9 @@ static int fg_probe(struct spmi_device *spmi)
 			goto power_supply_unregister;
 		}
 	}
+
+	chip->mi_last_soc = get_last_soc(chip);
+	pr_info("last soc %d\n", chip->mi_last_soc);
 
 	/* Fake temperature till the actual temperature is read */
 	chip->last_good_temp = 250;
@@ -8976,6 +8980,9 @@ static void check_and_update_sram_data(struct fg_chip *chip)
 
 	schedule_delayed_work(
 		&chip->update_sram_data, msecs_to_jiffies(time_left * 1000));
+
+	schedule_delayed_work(
+		&chip->soc_work, msecs_to_jiffies(SOC_WORK_MS));
 }
 
 static int fg_suspend(struct device *dev)
@@ -8985,6 +8992,7 @@ static int fg_suspend(struct device *dev)
 	if (!chip->sw_rbias_ctrl)
 		return 0;
 
+	cancel_delayed_work(&chip->soc_work);
 	cancel_delayed_work(&chip->update_temp_work);
 	cancel_delayed_work(&chip->update_sram_data);
 
