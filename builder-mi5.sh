@@ -6,8 +6,8 @@ TOOLCHAINDIR=~/toolchain/aarch64-linux-android-4.9
 DATE=$(date +"%d%m%Y")
 KERNEL_NAME="Pepsy-Kernel"
 DEVICE="-gemini-"
-VER="-v0.1-"
-TYPE="O-MR1"
+VER="-v0.1"
+TYPE="-O-MR1"
 FINAL_ZIP="$KERNEL_NAME""$DEVICE""$DATE""$TYPE""$VER".zip
 
 rm $ANYKERNEL_DIR/gemini/zImage $ANYKERNEL_DIR/gemini/dtb
