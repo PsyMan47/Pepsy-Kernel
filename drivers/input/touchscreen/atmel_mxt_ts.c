@@ -14,7 +14,9 @@
  */
 
 #include <linux/module.h>
+#ifndef CONFIG_MACH_XIAOMI_SCORPIO
 #include <linux/proc_fs.h>
+#endif
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/firmware.h>
@@ -5169,6 +5171,7 @@ static const struct attribute_group mxt_attr_group = {
 	.attrs = mxt_attrs,
 };
 
+#ifndef CONFIG_MACH_XIAOMI_SCORPIO
 static int mxt_proc_init(struct kernfs_node *sysfs_node_parent)
 {
 	int ret = 0;
@@ -5213,6 +5216,7 @@ static int mxt_proc_init(struct kernfs_node *sysfs_node_parent)
 
 	return ret;
 }
+#endif
 
 static void mxt_set_gesture_wake_up(struct mxt_data *data, bool enable)
 {
@@ -6837,7 +6841,9 @@ static int mxt_probe(struct i2c_client *client,
 		goto err_free_irq;
 	}
 
+        #ifndef CONFIG_MACH_XIAOMI_SCORPIO
 	mxt_proc_init(client->dev.kobj.sd);
+        #endif
 
 	sysfs_bin_attr_init(&data->mem_access_attr);
 	data->mem_access_attr.attr.name = "mem_access";
