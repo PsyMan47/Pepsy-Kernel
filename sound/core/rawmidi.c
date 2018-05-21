@@ -1,6 +1,7 @@
 /*
  *  Abstract layer for MIDI v1.0 stream
  *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
+ *  Copyright (C) 2018 XiaoMi, Inc.
  *
  *
  *   This program is free software; you can redistribute it and/or modify
@@ -114,6 +115,7 @@ static int snd_rawmidi_runtime_create(struct snd_rawmidi_substream *substream)
 	if ((runtime = kzalloc(sizeof(*runtime), GFP_KERNEL)) == NULL)
 		return -ENOMEM;
 	runtime->substream = substream;
+	mutex_init(&runtime->realloc_mutex);
 	spin_lock_init(&runtime->lock);
 	init_waitqueue_head(&runtime->sleep);
 	INIT_WORK(&runtime->event_work, snd_rawmidi_input_event_work);
@@ -645,9 +647,11 @@ static int snd_rawmidi_info_select_user(struct snd_card *card,
 int snd_rawmidi_output_params(struct snd_rawmidi_substream *substream,
 			      struct snd_rawmidi_params * params)
 {
-	char *newbuf, *oldbuf;
+	char *newbuf;
+	char *oldbuf;
 	struct snd_rawmidi_runtime *runtime = substream->runtime;
-	
+	unsigned long flags;
+
 	if (substream->append && substream->use_count > 1)
 		return -EBUSY;
 	snd_rawmidi_drain_output(substream);
@@ -658,17 +662,22 @@ int snd_rawmidi_output_params(struct snd_rawmidi_substream *substream,
 		return -EINVAL;
 	}
 	if (params->buffer_size != runtime->buffer_size) {
-		newbuf = kmalloc(params->buffer_size, GFP_KERNEL);
-		if (!newbuf)
+		mutex_lock(&runtime->realloc_mutex);
+		newbuf = __krealloc(runtime->buffer, params->buffer_size,
+				  GFP_KERNEL);
+		if (!newbuf) {
+			mutex_unlock(&runtime->realloc_mutex);
 			return -ENOMEM;
-		spin_lock_irq(&runtime->lock);
+		}
+		spin_lock_irqsave(&runtime->lock, flags);
 		oldbuf = runtime->buffer;
 		runtime->buffer = newbuf;
 		runtime->buffer_size = params->buffer_size;
 		runtime->avail = runtime->buffer_size;
-		runtime->appl_ptr = runtime->hw_ptr = 0;
-		spin_unlock_irq(&runtime->lock);
-		kfree(oldbuf);
+		spin_unlock_irqrestore(&runtime->lock, flags);
+		if (oldbuf != newbuf)
+			kfree(oldbuf);
+		mutex_unlock(&runtime->realloc_mutex);
 	}
 	runtime->avail_min = params->avail_min;
 	substream->active_sensing = !params->no_active_sensing;
@@ -972,6 +981,8 @@ static long snd_rawmidi_kernel_read1(struct snd_rawmidi_substream *substream,
 	unsigned long appl_ptr;
 
 	spin_lock_irqsave(&runtime->lock, flags);
+	if (userbuf)
+		mutex_lock(&runtime->realloc_mutex);
 	while (count > 0 && runtime->avail) {
 		count1 = runtime->buffer_size - runtime->appl_ptr;
 		if (count1 > count)
@@ -991,6 +1002,7 @@ static long snd_rawmidi_kernel_read1(struct snd_rawmidi_substream *substream,
 			spin_unlock_irqrestore(&runtime->lock, flags);
 			if (copy_to_user(userbuf + result,
 					 runtime->buffer + appl_ptr, count1)) {
+				mutex_unlock(&runtime->realloc_mutex);
 				return result > 0 ? result : -EFAULT;
 			}
 			spin_lock_irqsave(&runtime->lock, flags);
@@ -998,6 +1010,8 @@ static long snd_rawmidi_kernel_read1(struct snd_rawmidi_substream *substream,
 		result += count1;
 		count -= count1;
 	}
+	if (userbuf)
+		mutex_unlock(&runtime->realloc_mutex);
 	spin_unlock_irqrestore(&runtime->lock, flags);
 	return result;
 }
@@ -1263,10 +1277,14 @@ static long snd_rawmidi_kernel_write1(struct snd_rawmidi_substream *substream,
 		return -EINVAL;
 
 	result = 0;
+	if (userbuf)
+		mutex_lock(&runtime->realloc_mutex);
 	spin_lock_irqsave(&runtime->lock, flags);
 	if (substream->append) {
 		if ((long)runtime->avail < count) {
 			spin_unlock_irqrestore(&runtime->lock, flags);
+			if (userbuf)
+				mutex_unlock(&runtime->realloc_mutex);
 			return -EAGAIN;
 		}
 	}
@@ -1302,6 +1320,8 @@ static long snd_rawmidi_kernel_write1(struct snd_rawmidi_substream *substream,
       __end:
 	count1 = runtime->avail < runtime->buffer_size;
 	spin_unlock_irqrestore(&runtime->lock, flags);
+	if (userbuf)
+		mutex_unlock(&runtime->realloc_mutex);
 	if (count1)
 		snd_rawmidi_output_trigger(substream, 1);
 	return result;
