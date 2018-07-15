@@ -107,6 +107,24 @@ if [ $? != "0" ]; then
 fi;
 
 ui_print " ";
+ui_print "Pushing modules...";
+mount /system;
+mount -o rw,remount -t auto /system;
+rm -f /system/vendor/lib/modules/wlan.ko;
+rm -f /system/vendor/lib/modules/qca_cld/qca_cld_wlan.ko;
+cp -f /tmp/anykernel/wlan.ko /system/vendor/lib/modules/qca_cld/qca_cld_wlan.ko;
+rm -f /tmp/anykernel/wlan.ko;
+cp -f /tmp/anykernel/*.ko /system/lib/modules/;
+for module in $(find /system/lib/modules -name "*.ko"); do
+    chown 0:0 $module;
+    chmod 644 $module;
+    chcon "u:object_r:system_file:s0" $module;
+done;
+chown 0:0 /system/vendor/lib/modules/qca_cld/qca_cld_wlan.ko;
+chmod 644 /system/vendor/lib/modules/qca_cld/qca_cld_wlan.ko;
+chcon "u:object_r:vendor_file:s0" /system/vendor/lib/modules/qca_cld/qca_cld_wlan.ko;
+ln -sf /system/vendor/lib/modules/qca_cld/qca_cld_wlan.ko /system/vendor/lib/modules/wlan.ko;
+mount -o ro,remount -t auto /system;
 sleep 1;
 
 debugging;

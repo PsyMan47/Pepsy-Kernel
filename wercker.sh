@@ -11,7 +11,7 @@ DATE=$(date +"%d%m%Y")
 KERNEL_NAME="Pepsy-Kernel"
 DEVICE="-Xiaomi-8996-"
 VER="-v0.7.1"
-TYPE="-O-MR1"
+TYPE="-O-MR1-MIUI"
 FINAL_ZIP="$KERNEL_NAME""$DEVICE""$DATE""$TYPE""$VER".zip
 
 rm $ANYKERNEL_DIR/xiaomi-8996/Image.gz-dtb
@@ -34,6 +34,7 @@ make -j$( nproc --all )
   #try block
 
 cp $KERNEL_DIR/arch/arm64/boot/Image.gz-dtb $ANYKERNEL_DIR/xiaomi-8996
+find $KERNEL_DIR -name '*.ko' -exec cp '{}' "$ANYKERNEL_DIR/xiaomi-8996" \;
 
 } || {
 

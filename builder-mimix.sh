@@ -6,7 +6,7 @@ DATE=$(date +"%d%m%Y")
 KERNEL_NAME="Pepsy-Kernel"
 DEVICE="-lithium-"
 VER="-v0.7.1"
-TYPE="-O-MR1"
+TYPE="-O-MR1-MIUI"
 FINAL_ZIP="$KERNEL_NAME""$DEVICE""$DATE""$TYPE""$VER".zip
 
 rm $ANYKERNEL_DIR/lithium/Image.gz-dtb
@@ -25,5 +25,6 @@ make lithium_defconfig
 make -j$( nproc --all )
 
 cp $KERNEL_DIR/arch/arm64/boot/Image.gz-dtb $ANYKERNEL_DIR/lithium
+find $KERNEL_DIR -name '*.ko' -exec cp '{}' "$ANYKERNEL_DIR/lithium" \;
 cd $ANYKERNEL_DIR/lithium/
 zip -r9 $FINAL_ZIP * -x *.zip $FINAL_ZIP

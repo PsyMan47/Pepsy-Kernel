@@ -6,7 +6,7 @@ DATE=$(date +"%d%m%Y")
 KERNEL_NAME="Pepsy-Kernel"
 DEVICE="-scorpio-"
 VER="-v0.7.1"
-TYPE="-O-MR1"
+TYPE="-O-MR1-MIUI"
 FINAL_ZIP="$KERNEL_NAME""$DEVICE""$DATE""$TYPE""$VER".zip
 
 rm $ANYKERNEL_DIR/scorpio/Image.gz-dtb
@@ -25,6 +25,7 @@ make scorpio_defconfig
 make -j$( nproc --all )
 
 cp $KERNEL_DIR/arch/arm64/boot/Image.gz-dtb $ANYKERNEL_DIR/scorpio
+find $KERNEL_DIR -name '*.ko' -exec cp '{}' "$ANYKERNEL_DIR/scorpio" \;
 cd $ANYKERNEL_DIR/scorpio
 zip -r9 $FINAL_ZIP * -x *.zip $FINAL_ZIP
 
