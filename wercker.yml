@@ -1,0 +1,8 @@
+box: ubuntu
+build:
+ steps:
+  - script:
+    name: compile
+    code: |
+     bash wercker.sh
+
