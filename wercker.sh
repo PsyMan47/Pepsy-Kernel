@@ -10,7 +10,7 @@ CCACHEDIR=../CCACHE/xiaomi-8996
 DATE=$(date +"%d%m%Y")
 KERNEL_NAME="Pepsy-Kernel"
 DEVICE="-Xiaomi-8996-"
-VER="-v0.6"
+VER="-v0.7.1"
 TYPE="-O-MR1"
 FINAL_ZIP="$KERNEL_NAME""$DEVICE""$DATE""$TYPE""$VER".zip
 

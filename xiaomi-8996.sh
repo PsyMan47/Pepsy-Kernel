@@ -5,7 +5,7 @@ TOOLCHAINDIR=~/toolchain/aarch64-linux-android-4.9
 DATE=$(date +"%d%m%Y")
 KERNEL_NAME="Pepsy-Kernel"
 DEVICE="-Xiaomi-8996-"
-VER="-v0.6"
+VER="-v0.7.1"
 TYPE="-O-MR1"
 FINAL_ZIP="$KERNEL_NAME""$DEVICE""$DATE""$TYPE""$VER".zip
 
