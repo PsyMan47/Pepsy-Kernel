@@ -1,9 +1,11 @@
+#!/bin/bash
+
 KERNEL_DIR=$PWD
 ANYKERNEL_DIR=$KERNEL_DIR/AnyKernel2
 CCACHEDIR=../CCACHE/gemini
-TOOLCHAINDIR=~/toolchain/aarch64-linux-android-4.9
+TOOLCHAINDIR=/pipeline/build/root/toolchain/aarch64-linux-android-4.9
 DATE=$(date +"%d%m%Y")
-KERNEL_NAME="Pepsy-Kernel"
+KERNEL_NAME="Pepsy"
 DEVICE="-gemini-"
 VER="-v0.1"
 TYPE="-O-MR1"
@@ -27,6 +29,16 @@ make clean && make mrproper
 make gemini_defconfig
 make -j$( nproc --all )
 
+{
 cp $KERNEL_DIR/arch/arm64/boot/Image.gz-dtb $ANYKERNEL_DIR/gemini
+} || {
+  if [ $? != 0 ]; then
+    curl -s -X POST https://api.telegram.org/bot$BOT_API_KEY/sendMessage -d text="Build failed for gemini :c" -d chat_id=@pepsykernel;
+    exit
+  fi
+}
+
 cd $ANYKERNEL_DIR/gemini
 zip -r9 $FINAL_ZIP * -x *.zip $FINAL_ZIP
+curl -F chat_id="-1001152658251" -F document=@"$FINAL_ZIP" https://api.telegram.org/bot$BOT_API_KEY/sendDocument
+mv $FINAL_ZIP /pipeline/output/$FINAL_ZIP
