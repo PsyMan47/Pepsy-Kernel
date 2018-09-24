@@ -8,6 +8,8 @@ git clone https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarc
 git clone https://github.com/PsyMan47/SnapDragonLLVM_6.0 /pipeline/build/root/toolchain/SnapDragonLLVM_6.0
 
 curl -s -X POST https://api.telegram.org/bot$BOT_API_KEY/sendMessage -d text="$NAME$VERSION build started!" -d chat_id=@pepsykernel;
+curl -s -X POST https://api.telegram.org/bot$BOT_API_KEY/sendMessage -d text="Changelog:" -d chat_id=@pepsykernel;
+curl -s -X POST https://api.telegram.org/bot$BOT_API_KEY/sendMessage -d text="$(git log --pretty=format:'%h : %s' -10)" -d chat_id=@pepsykernel;
 
 bash builder-mi5.sh
 bash builder-mi5s.sh
@@ -15,5 +17,3 @@ bash builder-mi5splus.sh
 bash builder-mimix.sh
 bash builder-minote2.sh
 
-message="Latest commit: "
-curl -s -X POST https://api.telegram.org/bot$BOT_API_KEY/sendMessage -d text="$message $(git log --pretty=format:'%h : %s' -1)" -d chat_id=@pepsykernel
