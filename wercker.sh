@@ -7,6 +7,8 @@ dpkg --add-architecture i386 && apt-get update && apt-get install -y git ccache 
 git clone https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 /pipeline/build/root/toolchain/aarch64-linux-android-4.9
 
 curl -s -X POST https://api.telegram.org/bot$BOT_API_KEY/sendMessage -d text="$NAME$VERSION build started!" -d chat_id=@pepsykernel;
+curl -s -X POST https://api.telegram.org/bot$BOT_API_KEY/sendMessage -d text="Changelog:" -d chat_id=@pepsykernel;
+curl -s -X POST https://api.telegram.org/bot$BOT_API_KEY/sendMessage -d text="$(git log --pretty=format:'%h : %s' -10)" -d chat_id=@pepsykernel;
 
 bash builder-mi5.sh
 bash builder-mi5s.sh
@@ -14,5 +16,3 @@ bash builder-mi5splus.sh
 bash builder-mimix.sh
 bash builder-minote2.sh
 
-message="Latest commit: "
-curl -s -X POST https://api.telegram.org/bot$BOT_API_KEY/sendMessage -d text="$message $(git log --pretty=format:'%h : %s' -1)" -d chat_id=@pepsykernel
