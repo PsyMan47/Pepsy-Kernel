@@ -7,8 +7,8 @@ TOOLCHAINDIR=/pipeline/build/root/toolchain/aarch64-linux-android-4.9
 DATE=$(date +"%d%m%Y")
 KERNEL_NAME="Pepsy"
 DEVICE="-capricorn-"
-VER="-v0.1"
-TYPE="-O-MR1"
+VER="-v1.4"
+TYPE="-O-MR1-EAS"
 FINAL_ZIP="$KERNEL_NAME""$DEVICE""$DATE""$TYPE""$VER".zip
 
 rm $ANYKERNEL_DIR/capricorn/Image.gz-dtb
