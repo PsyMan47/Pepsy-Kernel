@@ -7,7 +7,7 @@ TOOLCHAINDIR=/pipeline/build/root/toolchain/aarch64-linux-android-4.9
 DATE=$(date +"%d%m%Y")
 KERNEL_NAME="Pepsy"
 DEVICE="-lithium-"
-VER="-v1.1"
+VER="-v1.2"
 TYPE="-PPR1"
 FINAL_ZIP="$KERNEL_NAME""$DEVICE""$DATE""$TYPE""$VER".zip
 
