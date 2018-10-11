@@ -15,6 +15,9 @@ rm $KERNEL_DIR/arch/arm64/boot/Image.gz $KERNEL_DIR/arch/arm64/boot/Image.gz-dtb
 export ARCH=arm64
 export KBUILD_BUILD_USER="Psy_Man"
 export KBUILD_BUILD_HOST="PsyBuntu"
+export CC=~/toolchain/SnapDragonLLVM_6.0/prebuilt/linux-x86_64/bin/clang
+export CXX=~/toolchain/SnapDragonLLVM_6.0/prebuilt/linux-x86_64/bin/clang++
+export CLANG_TRIPLE=aarch64-linux-gnu-
 export CROSS_COMPILE=$TOOLCHAINDIR/bin/aarch64-linux-android-
 export LD_LIBRARY_PATH=$TOOLCHAINDIR/lib/
 export USE_CCACHE=1
