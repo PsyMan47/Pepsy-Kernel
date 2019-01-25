@@ -1,4 +1,4 @@
-CONFIG_LOCALVERSION="-Pepsy-Kernel-v1.6-eas"
+CONFIG_LOCALVERSION="-Pepsy-Kernel-v1.7-eas"
 # CONFIG_USELIB is not set
 CONFIG_AUDIT=y
 CONFIG_NO_HZ=y
