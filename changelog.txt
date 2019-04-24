@@ -1,0 +1,3 @@
+- Kernel: Upstream to Linux 3.18.138 from kernel.org
+- Kernel: Upstream to LA.UM.7.5.r1-04500-8x96.0 from CodeAuroraForum
+- Qcalcd-2.0: Upstream to LA.UM.7.5.r1-04500-8x96.0 from CodeAuroraForum
